@@ -28,6 +28,7 @@ type Config struct {
 		Ipsec   bool `yaml:"ipsec,omitempty"`
 		IPAddr   bool `yaml:"ipaddr,omitempty"`
 		PPP      bool `yaml:"ppp,omitempty"`
+		DHCPP      bool `yaml:"dhcpp,omitempty"`
 	} `yaml:"features,omitempty"`
 }
 
