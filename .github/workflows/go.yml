@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE_NAME: mikrotik-exporter
+  IMAGE_NAME: super-tribble
 
 jobs:
   build:
