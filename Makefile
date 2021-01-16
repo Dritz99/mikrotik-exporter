@@ -29,8 +29,3 @@ deploy: utils
 	@echo Create release ...
 	@ghr -t ${GITHUB_TOKEN} -u ${USERNAME} -r ${REPONAME} -replace ${VERSION} dist/
 	@echo Done !
-
-dockerhub:
-	@docker login -u ${USERNAME} -p ${DOCKER_TOKEN}
-	docker build -t ${USERNAME}/${REPONAME}:${VERSION} .
-	docker push ${USERNAME}/${REPONAME}:${VERSION}
