@@ -1,0 +1,14 @@
+version: "3"
+
+services:
+  exporter:
+    image: hatamiarash7/mikrotik-exporter:latest
+    container_name: mikrotik-exporter
+    restart: unless-stopped
+    environment:
+      - DEVICE=home
+      - ADDRESS=192.168.1.4
+      - USER=prometheus
+      - PASSWORD=changeme
+    ports:
+      - 9436:9436
