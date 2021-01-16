@@ -1,0 +1,21 @@
+devices:
+  - name: home
+    address: 192.168.1.1
+    user: foo
+    password: bar
+  - name: company
+    address: 192.168.2.1
+    user: test
+    password: 1234
+
+features:
+  bgp: true
+  dhcp: true
+  dhcpv6: true
+  dhcpl: true
+  routes: true
+  pools: true
+  optics: true
+  wlansta: true
+  wlanif: true
+  ipsec: true
