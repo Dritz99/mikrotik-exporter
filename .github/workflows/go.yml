@@ -1,0 +1,136 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_NAME: mikrotik-exporter
+
+jobs:
+  build:
+    name: Build & Publish binaries
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.13.8
+        id: go
+
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Get dependencies
+        run: |
+          go get -v -t -d ./...
+          if [ -f Gopkg.toml ]; then
+              curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+              dep ensure
+          fi
+      - name: Set SHORTSHA
+        id: sha
+        run: echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+
+      - name: Read version
+        id: version_env
+        uses: falti/dotenv-action@v0.2.5
+        with:
+          path: .version
+
+      - name: Build
+        env:
+          LDFLAGS: "-X main.appVersion=${{ steps.version_env.outputs.version }} -X main.shortSha=${{ steps.sha.outputs.sha_short }}"
+        run: go build -v -ldflags="${{ env.LDFLAGS }}" .
+
+      - name: Publish
+        env:
+          CGO_ENABLED: 0
+          LDFLAGS: "-X main.appVersion=${{ steps.version_env.outputs.version }} -X main.shortSha=${{ steps.sha.outputs.sha_short }}"
+        run: |
+          go get github.com/mitchellh/gox
+          go get github.com/tcnksm/ghr
+          gox -os="linux freebsd netbsd" -arch="amd64 arm arm64 386" -parallel=8 -ldflags "${{ env.LDFLAGS }}" -output "dist/${{ env.IMAGE_NAME }}_{{.OS}}_{{.Arch}}"
+          ghr -t ${{ github.token }} -u ${{ github.actor }} -r ${{ env.IMAGE_NAME }} -replace ${{ steps.version_env.outputs.version }} dist/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: binaries
+          path: dist/${{ env.IMAGE_NAME }}_linux_*
+
+  docker:
+    name: Build & Publish Docker image
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+          path: dist/
+
+      - name: Display binary list
+        run: ls -R
+        working-directory: dist/
+
+      - name: Read version
+        id: version_env
+        uses: falti/dotenv-action@v0.2.5
+        with:
+          path: .version
+
+      - name: Prepare
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login --username "${{ github.actor }}" --password-stdin
+
+      - name: Push to Dockerhub
+        run: |
+          docker build -t ${{ github.actor }}/${{ env.IMAGE_NAME }}:amd64 --build-arg BASE_ARCH=amd64 --build-arg BINARY_ARCH=amd64 --file Dockerfile .
+          docker build -t ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm32v7 --build-arg BASE_ARCH=arm32v7 --build-arg BINARY_ARCH=arm  --file Dockerfile.arm .
+          docker build -t ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm64v8 --build-arg BASE_ARCH=arm64v8 --build-arg BINARY_ARCH=arm64 --file Dockerfile.arm .
+          docker build -t ${{ github.actor }}/${{ env.IMAGE_NAME }}:i386 --build-arg BASE_ARCH=i386 --build-arg BINARY_ARCH=386 --file Dockerfile .
+          docker push ${{ github.actor }}/${{ env.IMAGE_NAME }}:amd64
+          docker push ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm32v7
+          docker push ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm64v8
+          docker push ${{ github.actor }}/${{ env.IMAGE_NAME }}:i386
+          export DOCKER_CLI_EXPERIMENTAL=enabled
+          docker manifest create ${{ github.actor }}/${{ env.IMAGE_NAME }}:latest ${{ github.actor }}/${{ env.IMAGE_NAME }}:amd64 ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm32v7 ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm64v8 ${{ github.actor }}/${{ env.IMAGE_NAME }}:i386
+          docker manifest annotate ${{ github.actor }}/${{ env.IMAGE_NAME }}:latest ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm32v7 --os linux --arch arm
+          docker manifest annotate ${{ github.actor }}/${{ env.IMAGE_NAME }}:latest ${{ github.actor }}/${{ env.IMAGE_NAME }}:arm64v8 --os linux --arch arm64 --variant armv8
+          docker manifest push ${{ github.actor }}/${{ env.IMAGE_NAME }}:latest
+      - name: Push to Github
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
+          IMAGE_ID=docker.pkg.github.com/${{ github.repository }}/$IMAGE_NAME
+          # Change all uppercase to lowercase
+          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+          # Strip git ref prefix from version
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          # Strip "v" prefix from tag name
+          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
+          # Use Docker `latest` tag convention
+          [ "$VERSION" == "master" ] && VERSION=latest
+          docker build --tag $IMAGE_ID:$VERSION --build-arg BASE_ARCH=amd64 --build-arg BINARY_ARCH=amd64 .
+          docker push $IMAGE_ID:$VERSION
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ github.actor }}/${{ env.IMAGE_NAME }}:amd64
+          format: "template"
+          template: "@/contrib/sarif.tpl"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: Clear
+        run: |
+          rm -f ${HOME}/.docker/config.json
